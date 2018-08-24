@@ -8,6 +8,13 @@ Standard AutoEncoder architecture
 #############################################################################################################
 """
 
+# TODO try load all layers, not only the one untrainable ! ! !
+
+# TODO check better handling of error prints and exceptions
+# TODO comment global arguments
+# TODO Gabor?
+
+
 import  os
 import  sys
 import  time
@@ -17,17 +24,23 @@ import  cnfg        as cf
 import  nn_arch     as na
 import  nn_train    as nt
 import  nn_test     as ns
+import  nn_dset     as nd
 
 
 FRMT                = "%y-%m-%d_%H-%M-%S"
-STDERR              = True
 
-dir_dset            = "dataset"
+dset_root           = "dataset"
+dset_gray           = os.path.join( dset_root, "dset_gray" )
+dset_rgb            = os.path.join( dset_root, "dset_rgb" )
+
 dir_cnfg            = "config"
 dir_res             = "res"
 dir_current         = None
 
-dir_test            = os.path.join( dir_dset, "frames_L/test/frames" )  # overwritten in case of TRAIN=True
+train_err           = "train.err"
+train_log           = "train.log"
+train_time          = "train.time"
+
 
 
 # ===========================================================================================================
@@ -37,68 +50,72 @@ dir_test            = os.path.join( dir_dset, "frames_L/test/frames" )  # overwr
 dir_current         = os.path.join( dir_res, time.strftime( FRMT ) )
 os.makedirs( dir_current )
 
+# read configs from command line arguments
+args        = cf.get_args()
+
 # redirect stderr in log file
-if STDERR:
-    log         = os.path.join( dir_current, 'train.err' )
+if args[ 'STDERR' ]:
+    log         = os.path.join( dir_current, train_err )
     sys.stderr  = open( log, 'w' )
 
 # -----------------------------------------------------------------------------------------------------------
 
-# read configs from command line arguments
-args        = cf.get_args()
+# get configs
+cnfg                    = cf.get_config( args[ 'CONFIG' ] )
+cnfg[ 'dir_dset' ]      = os.path.join( dset_root, cnfg[ 'dir_dset' ] )
+cnfg[ 'dir_current' ]   = dir_current
 
-# load architecture config
-cf.load_config( os.path.join( dir_cnfg, args[ 'ARCH' ] ), na.cnfg )
-na.RGB              = na.cnfg[ 'img_size' ][ -1 ] > 1
-na.dir_current      = dir_current
-
-# create network model
-nn      = na.create_model()
-na.model_graph( nn )
+cf.load_config( cnfg, na.cnfg )
+cf.load_config( cnfg, nt.cnfg )
+cf.load_config( cnfg, ns.cnfg )
+cf.load_config( cnfg, nd.cnfg )
 
 # -----------------------------------------------------------------------------------------------------------
 
-if args[ 'TRAIN' ] is not None:
+if args[ 'LOAD' ] is not None:
+    nn  = na.load_model( args[ 'LOAD' ] )
+else:
+    nn  = na.create_model()
+
+na.model_graph( nn )
+na.model_summary( nn )
+
+# -----------------------------------------------------------------------------------------------------------
+
+if args[ 'TRAIN' ]:
     # redirect stdout in log file
-    log         = os.path.join( dir_current, 'train.log' )
+    log         = os.path.join( dir_current, train_log )
     sys.stdout  = open( log, 'w' )
     
-    # load training config
-    cf.load_config( os.path.join( dir_cnfg, args[ 'TRAIN' ] ), nt.cnfg )
-    nt.cnfg[ 'dir_dset' ]   = os.path.join( dir_dset, nt.cnfg[ 'dir_dset' ] )
-    nt.RGB                  = na.RGB
-    nt.img_size             = na.cnfg[ 'img_size' ]
-    nt.dir_current          = dir_current
-    dir_test                = os.path.join( nt.cnfg[ 'dir_dset' ], 'test/frames' )
-
     # train model
-    nt.train_model( nn )
-    nt.save_model( nn )
+    history     = nt.train_model( nn, train_time )
+    nt.plot_history( history )
+    na.save_model( nn )
 
     # restore stdout
     sys.stdout  = sys.__stdout__
 
 # -----------------------------------------------------------------------------------------------------------
 
-# TODO put it on top and load entire folder
-if args[ 'LOAD' ] is not None:
-    nn.load_weights( args[ 'LOAD' ] )
-
-# -----------------------------------------------------------------------------------------------------------
-
 if args[ 'TEST' ]:
-    # set up test config
-    ns.RGB              = na.RGB
-    ns.img_size         = na.cnfg[ 'img_size' ]
-    ns.dir_current      = dir_current
+    dir_test    = os.path.join( cnfg[ 'dir_dset' ], 'test' )
+    nn_test     = ns.create_test_model( nn )
+    
+    if cnfg[ 'arch' ] == 'AE_SEGM':
+        test_frame  = os.path.join( dir_test, 'frame', 'img' )
+        test_class  = os.path.join( dir_test, cnfg[ 'data_class' ].lower(), 'img' )
 
-    # test routines
-    nn_test = ns.create_test_model( nn )
-    ns.model_dead( nn_test, 1, 100, dir_test )
+        ns.test_samples( nn, cnfg[ 'data_class' ].lower() )
+        ns.evaluate_tset( nn, test_frame, test_class )
 
-    ns.model_outputs( nn_test, 1, dir_test=dir_test )
-    #ns.model_outputs( nn_test, "i.png" )
+    if cnfg[ 'arch' ] == 'AE_SIMPLE':
+        test_frame  = os.path.join( dir_test, 'img' )
 
+        ns.test_samples( nn )
+        ns.evaluate_tset( nn, test_frame, test_frame )
+        ns.model_dead( nn_test, 1, 1, test_frame )
+
+    ns.model_outputs( nn_test, 1, dtest=test_frame )
     ns.model_weights( nn )
 
 # -----------------------------------------------------------------------------------------------------------
@@ -107,15 +124,16 @@ if args[ 'ARCHIVE' ] > 0:
     # save config files
     if args[ 'ARCHIVE' ] >= 1:
         os.makedirs( os.path.join( dir_current, 'config' ) )
-        cfile   = os.path.join( dir_cnfg, args[ 'ARCH' ] )
-        if args[ 'TRAIN' ] is not None:
-            cfile   += ' ' + os.path.join( dir_cnfg, args[ 'TRAIN' ] )
+        cfile   =  args[ 'CONFIG' ]
         os.system( "cp {} {}".format( cfile, os.path.join( dir_current, 'config' ) ) )
 
     # save python sources
     if args[ 'ARCHIVE' ] >= 2:
         os.makedirs( os.path.join( dir_current, 'src' ) )
-        pfile   = "cnfg.py msg.py nn_arch.py nn_main.py nn_test.py nn_train.py"
+        pfile   = "src/*.py"
         os.system( "cp {} {}".format( pfile, os.path.join( dir_current, 'src' ) ) )
 
-
+"""
+if __name__ == '__main__':
+    main( sys.argv )
+"""

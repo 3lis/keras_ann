@@ -11,79 +11,139 @@ Test routines to evaluate performance of model
 import  os
 import  numpy       as np
 
-from    keras       import Model, preprocessing
+from    keras       import Model, preprocessing, losses, optimizers
 from    math        import sqrt, ceil, inf
 from    PIL         import Image
 
-import  matplotlib
-matplotlib.use( 'agg' )         # to use matplot with unknown 'DISPLAY' var
-from    matplotlib  import pyplot, cm, ticker
-
 import  msg         as ms
+from    nn_train    import get_unbalanced_loss
 
 
-DEBUG0              = False
+DEBUG0      = False
+dir_plot    = 'plot'
+dir_test    = 'test'
 
-RGB                 = None      # set by nn_main.py
-img_size            = None      # set by nn_main.py
-dir_test            = None      # set by nn_main.py
-dir_current         = None      # set by nn_main.py
+cnfg        = {
+    'loss'          : None,     # [str] used in evaluate_tset()
+    'dir_current'   : None
+}
 
-dir_plot            = 'plot'
+samples     = {                 # TODO list of manually selected representative samples to be fed to a model
+    'frame'     : [  12, 102, 320, 682, 685, 752, 805, 812, 866, 904, 931, 941, 993, 1027, 1081, 1090 ],
+    'cars'      : [  12, 102, 320, 682, 685, 752, 805, 812, 866, 904, 931, 941, 993, 1027, 1081, 1090 ],
+    'lane'      : [  12, 102, 320, 682, 685, 752, 805, 812, 866, 904, 931, 941, 993, 1027, 1081, 1090 ]
+}
 
 
 
-def create_test_model( model, weights=None ):
+# ===========================================================================================================
+#
+#   - in_rgb
+#   - out_rgb
+#   - imgsize
+#
+#   - array_to_image
+#   - save_image
+#   - save_collage
+#
+#   - create_test_model
+#   - attach_loss
+#
+# ===========================================================================================================
+
+def imgsize( model ):
     """ -----------------------------------------------------------------------------------------------------
-    Create a new version of an existing model, producing an output after every layer,
-    useful for testing.
-
-    model:          [keras.engine.training.Model] original model
-    weights:        [str] name of the file with saved weights
-
-    return:         [keras.engine.training.Model] new model
-    ----------------------------------------------------------------------------------------------------- """
-    if weights is not None:
-        try:
-            model.load_weights( weights )
-        except:
-            ms.print_err( "while opening file " + weights )
-            raise
-
-    layers_out   = [ l.output for l in model.layers[ 1: ] ]
-
-    #return Model( inputs=model.input, outputs=layers_out )
-
-    # NOTE get_input_at() is required when using multiple GPUs
-    return Model( inputs=model.get_input_at( 0 ), outputs=layers_out )
-
-
-
-def predict_image( model, img ):
-    """ -----------------------------------------------------------------------------------------------------
-    Return the model prediction on an image
+    Return height and width of input
 
     model:          [keras.engine.training.Model]
-    img:            [str] image file
 
-    return:         [numpy.ndarray]
+    return:         [list]
     ----------------------------------------------------------------------------------------------------- """
-    try:
-        i   = preprocessing.image.load_img( img, grayscale=( not RGB ), target_size=img_size[ :-1 ] )
-    except:
-        ms.print_err( "while opening file " + img )
-        raise
+    s   = model.input_shape
 
-    i   = preprocessing.image.img_to_array( i )
-    i   = np.expand_dims( i, axis=0 )
-    i  /= 255.
+    if len( s ) == 3:
+        return model.input_shape[ :2 ]
 
-    return model.predict( i )
+    if len( s ) == 4:
+        return model.input_shape[ 1:3 ]
 
 
 
-def img_collage( imgs, w, h, pad_size=5, pad_color="#ff5555" ):
+def in_rgb( model ):
     """ -----------------------------------------------------------------------------------------------------
+    Return True if output is RGB, False if graylevel
+
+    model:          [keras.engine.training.Model]
+
+    return:         [bool]
+    ----------------------------------------------------------------------------------------------------- """
+    return model.input_shape[ -1 ] != 1
+
+
+
+def out_rgb( model ):
+    """ -----------------------------------------------------------------------------------------------------
+    Return True if output is RGB, False if graylevel
+
+    model:          [keras.engine.training.Model]
+
+    return:         [bool]
+    ----------------------------------------------------------------------------------------------------- """
+    return model.output_shape[ -1 ] != 1
+
+
+
+def array_to_image( array, rgb ):
+    """ -----------------------------------------------------------------------------------------------------
+    Convert numpy.ndarray to PIL.Image
+
+    array:          [numpy.ndarray] pixel values
+    rgb:            [bool] True if RGB, false if grayscale
+
+    return:         [PIL.Image.Image]
+    ----------------------------------------------------------------------------------------------------- """
+    if len( array.shape ) == 4:
+        array   = array[ 0, :, :, : ]                           # remove batch axis
+
+    pixels  = array if rgb else array[ :, :, 0 ]
+    pixels  = 255. * ( pixels - pixels.min() ) / pixels.ptp()   # normalization
+    pixels  = np.uint8( pixels )
+
+    if rgb:
+        img     = Image.fromarray( pixels, 'RGB' )
+
+    else:
+        img     = Image.fromarray( pixels )
+        img     = img.convert( 'RGB' )
+
+    return img
+
+
+
+def save_image( array, rgb, fname ):
+    """ -----------------------------------------------------------------------------------------------------
+    Save a pixel matrix in image file
+
+    array:          [numpy.ndarray] pixel values
+    rgb:            [bool] True if RGB, false if grayscale
+    fname:          [str] path of output file
+    ----------------------------------------------------------------------------------------------------- """
+    img = array_to_image( array, rgb )
+    img.save( fname )
+
+
+
+def save_collage( imgs, w, h, fname, pad_size=5, pad_color="#aa0000" ):
+    """ -----------------------------------------------------------------------------------------------------
+    Combine a set of images into a collage
+
+    imgs:           [list of PIL.Image.Image]
+    w:              [int] desired width of single image tile inside the collage
+    h:              [int] desired height of single image tile inside the collage
+    pad_size:       [int] pixels between image tiles
+    pad_color:      [str] padding color
+
+    return:         [PIL.Image.Image]
     ----------------------------------------------------------------------------------------------------- """
     n_imgs  = len( imgs )
     n_cols  = ceil( sqrt( n_imgs ) )
@@ -109,14 +169,248 @@ def img_collage( imgs, w, h, pad_size=5, pad_color="#ff5555" ):
         if i >= n_imgs: 
             break
 
+    img.save( fname )
     return img
 
 
 
-def layer_outputs( layer, output, pth, normalize=True, prfx="out_" ):
+def create_test_model( model, weights=None ):
+    """ -----------------------------------------------------------------------------------------------------
+    Create a new version of an existing model, producing an output after every layer,
+    useful for testing.
+
+    model:          [keras.engine.training.Model] original model
+    weights:        [str] name of the file with saved weights
+
+    return:         [keras.engine.training.Model] new model
+    ----------------------------------------------------------------------------------------------------- """
+    if weights is not None:
+        try:
+            model.load_weights( weights )
+        except Exception as e:
+            raise e
+
+    # TODO when loading a model entirely from HDF5, it gives the error:
+    # "the notion of "layer output" is ill-defined. Use `get_output_at(node_index)` instead."
+    layers_out  = [ l.output for l in model.layers[ 1: ] ]
+
+    return Model( inputs=model.get_input_at( 0 ), outputs=layers_out )
+
+
+
+def attach_loss( model ):
+    """ -----------------------------------------------------------------------------------------------------
+    Attach a loss to an un-compiled model
+
+    model:          [keras.engine.training.Model] original model, not returned by create_test_model()
+    ----------------------------------------------------------------------------------------------------- """
+    if cnfg[ 'loss' ] == 'MSE':
+        ls      = losses.mean_squared_error
+    elif cnfg[ 'loss' ] == 'CXE':
+        ls      = losses.categorical_crossentropy
+    elif cnfg[ 'loss' ] == 'BXE':
+        ls      = losses.binary_crossentropy
+    elif cnfg[ 'loss' ] == 'UNB':
+        ls      = get_unbalanced_loss()
+    else:
+        ms.print_err( "Loss {} not valid".format( cnfg[ 'loss' ] ) )
+    
+    # optimizer is not relevant, but required by compile()
+    model.compile( optimizer=optimizers.SGD(), loss=ls )
+
+
+
+# ===========================================================================================================
+#
+#   - predict_image
+#   - evaluate_image
+#   - evaluate_tset
+#   - test_samples
+#
+# ===========================================================================================================
+
+def predict_image( model, img, save=False ):
+    """ -----------------------------------------------------------------------------------------------------
+    Return the model prediction, given an input image
+
+    model:          [keras.engine.training.Model]
+    img:            [str] path of image file
+    save:           [bool] if True save input and output images
+
+    return:         [numpy.ndarray] prediction
+    ----------------------------------------------------------------------------------------------------- """
+    try:
+        i   = preprocessing.image.load_img(
+                img,
+                grayscale   = ( not in_rgb( model ) ),
+                target_size = imgsize( model )
+        )
+    except Exception as e:
+        raise e
+
+    i       = preprocessing.image.img_to_array( i )
+
+    if save:
+        save_image( i, in_rgb( model ), os.path.join( cnfg[ 'dir_current' ], 'p_input.jpg' ) )
+
+    i       = np.expand_dims( i, axis=0 )
+    i       /= 255.
+    pred    = model.predict( i )
+
+    if save:
+        save_image(
+                pred,
+                out_rgb( model ),
+                os.path.join( cnfg[ 'dir_current' ], 'p_output.jpg' )
+        )
+
+    return pred
+
+
+
+def evaluate_image( model, img_x, img_y ):
+    """ -----------------------------------------------------------------------------------------------------
+    Return the model loss, given an input image and its target image (ground truth)
+
+    model:          [keras.engine.training.Model]
+    img_x:          [str] path of input image file
+    img_y:          [str] path of target image file
+
+    return:         [float] loss
+    ----------------------------------------------------------------------------------------------------- """
+    try:
+        i1  = preprocessing.image.load_img(
+                img_x,
+                grayscale   = ( not in_rgb( model ) ),
+                target_size = imgsize( model )
+        )
+    except Exception as e:
+        raise e
+
+    i1      = preprocessing.image.img_to_array( i1 )
+    i1      = np.expand_dims( i1, axis=0 )
+    i1      /= 255.
+
+    try:
+        i2  = preprocessing.image.load_img(
+                img_y,
+                grayscale   = ( not out_rgb( model ) ),
+                target_size = imgsize( model )
+        )
+    except Exception as e:
+        raise e
+
+    i2      = preprocessing.image.img_to_array( i2 )
+    i2      = np.expand_dims( i2, axis=0 )
+    i2      /= 255.
+
+    loss    = model.evaluate( i1, i2, batch_size=1, verbose=0 )
+
+    return loss
+
+
+
+def evaluate_tset( model, input_dir, output_dir, fname="eval_test.txt"  ):
+    """ -----------------------------------------------------------------------------------------------------
+    Evaluate the model on a test set
+
+    model:          [keras.engine.training.Model] original model
+    input_dir:      [str] folder of input images
+    output_dir:     [str] folder of target images
+    fname:          [str] path of output file (if asked)
+
+    return:         [dir] values:   [float] losses
+                          keys:     [str] frame number
+    ----------------------------------------------------------------------------------------------------- """
+    if not os.path.isdir( input_dir ):
+        raise ValueError( "{} directory does not exist".format( input_dir ) )
+
+    if not os.path.isdir( output_dir ):
+        raise ValueError( "{} directory does not exist".format( output_dir ) )
+
+    pth         = os.path.join( cnfg[ 'dir_current' ], dir_test )
+    if not os.path.exists( pth ):
+        os.makedirs( pth )
+
+    # if the model is not compiled yet
+    if not hasattr( model, 'loss' ):
+        attach_loss( model )
+
+    d               = {}
+    input_imgs      = sorted( [ f for f in os.listdir( input_dir )
+            if f.lower().endswith( ( '.png', '.jpg', '.jpeg' ) ) ] )
+    output_imgs     = sorted( [ f for f in os.listdir( output_dir )
+            if f.lower().endswith( ( '.png', '.jpg', '.jpeg' ) ) ] )
+
+    for ix, iy in zip( input_imgs, output_imgs ):
+        frame       = ix.split( '_' )[ 0 ]
+        img_x       = os.path.join( input_dir, ix )
+        img_y       = os.path.join( output_dir, iy )
+        loss        = evaluate_image( model, img_x, img_y )
+        d[ frame ]  = loss
+
+    if fname is not None:
+        f   = open( os.path.join( pth, fname ), 'w' )
+        for kv in sorted( d.items(), key=lambda x: x[ 1 ] ):
+            f.write( '{}\t{}\n'.format( *kv ) )
+        f.close()
+
+    mean        = np.array( list( d.values() ) ).mean()
+    d[ 'mean' ] = mean
+        
+    return d
+
+    
+
+def test_samples( model, data_class=None, dtest="dataset/dset_rgb" ):
+    """ -----------------------------------------------------------------------------------------------------
+    Test the model on a set of samples, and plot the predicted output
+
+    model:          [keras.engine.training.Model]
+    data_class:     [str] if None consider the standard autoencoder output
+    dtest:          [str] dataset directory
+    ----------------------------------------------------------------------------------------------------- """
+    pth         = os.path.join( cnfg[ 'dir_current' ], dir_test )
+    if not os.path.exists( pth ):
+        os.makedirs( pth )
+
+    # get names of all image files of the samples
+    if data_class is not None:
+        i_fmt       = "{:06d}_frame.jpg"
+        t_fmt       = "{:06d}_{}.jpg"
+        i_names     = [ os.path.join( dtest, i_fmt.format( f ) ) for f in samples[ data_class ] ]
+        t_names     = [ os.path.join( dtest, t_fmt.format( f, data_class ) ) for f in samples[ data_class ] ]
+
+    else:
+        fmt         = "{:06d}_frame.jpg"
+        i_names     = [ os.path.join( dtest, fmt.format( f ) ) for f in samples[ 'frame' ] ]
+        t_names     = i_names
+
+    targets     = [ Image.open( img ) for img in t_names ]                          # get ground truths
+    outputs     = [ predict_image( model, img ) for img in i_names ]                # get predictions
+    outputs     = [ array_to_image( o, out_rgb( model ) ) for o in outputs ]
+
+    h, w        = imgsize( model )
+    save_collage( targets, w, h, os.path.join( pth, "smpl_target.jpg" ) )
+    save_collage( outputs, w, h, os.path.join( pth, "smpl_predict.jpg" ) )
+
+
+
+# ===========================================================================================================
+#
+#   - layer_outputs
+#   - layer_weights
+#   - model_outputs
+#   - model_weights
+#   - model_dead
+#
+# ===========================================================================================================
+
+def layer_outputs( model, layer, output, pth, normalize=True, prfx="out_" ):
     """ -----------------------------------------------------------------------------------------------------
     Plot the output of a convolutional layer
 
+    model:          [keras.engine.training.Model]
     layer:          [str] name of layer
     output:         [numpy.ndarray]
     pth:            [str] where to store results
@@ -126,7 +420,7 @@ def layer_outputs( layer, output, pth, normalize=True, prfx="out_" ):
     return:         [tuple] number of dead filters and total number of filters
     ----------------------------------------------------------------------------------------------------- """
     n_feat      = output.shape[ -1 ]
-    h, w        = img_size[ :2 ]
+    h, w        = imgsize( model )
     feat_list   = []
     cnt         = 0
 
@@ -141,22 +435,22 @@ def layer_outputs( layer, output, pth, normalize=True, prfx="out_" ):
             cnt += 1
 
         elif normalize:                             # pixel normalization (only when ptp is not zero)
-            pixels      = 255. * ( pixels - pixels.min() ) / ptp    # NOTE check this formula
+            pixels      = 255. * ( pixels - pixels.min() ) / ptp
 
         feat_list.append( Image.fromarray( pixels ) )
 
     fname   = prfx + layer + '.jpg'
-    i       = img_collage( feat_list, w, h )
-    i.save( os.path.join( pth, fname ) )
+    i       = save_collage( feat_list, w, h, os.path.join( pth, fname ) )
 
     return cnt, n_feat
 
 
 
-def layer_weights( layer, wght, pth, dpi=10, normalize=False, prfx="wght_" ):
+def layer_weights( model, layer, wght, pth, dpi=10, normalize=False, prfx="wght_" ):
     """ -----------------------------------------------------------------------------------------------------
     Plot the kernel weights of a convolutional layer
 
+    model:          [keras.engine.training.Model]
     layer:          [str] name of layer
     wght:           [numpy.ndarray]
     pth:            [str] where to store results
@@ -185,7 +479,7 @@ def layer_weights( layer, wght, pth, dpi=10, normalize=False, prfx="wght_" ):
         elif normalize:
             pixels  = 255. * ( pixels - pixels.min() ) / ptp
 
-        else:
+        else:                                       # for normalizing the entire image collage
             mn      = min( pixels.min(), mn )
             mx      = max( pixels.max(), mx )
 
@@ -197,31 +491,29 @@ def layer_weights( layer, wght, pth, dpi=10, normalize=False, prfx="wght_" ):
     wght_list   = [ Image.fromarray( pixels ) for pixels in wght_list ]
 
     fname   = prfx + layer + '.jpg'
-    i       = img_collage( wght_list, w, h )
-    i.save( os.path.join( pth, fname ) )
+    i       = save_collage( wght_list, w, h, os.path.join( pth, fname ) )
 
 
 
-def model_outputs( model, img, dir_test=None, normalize=True ):
+def model_outputs( model, img, dtest=None, normalize=True ):
     """ -----------------------------------------------------------------------------------------------------
     Plot the output of all convolutional layers in the model.
     The argument 'img' can be the path of image file, or and integer index of a frame in the test set
 
     model:          [keras.engine.training.Model] the result of create_test_model()
     img:            [str or int] image file
-    dir_test:       [str] dataset directory (only when 'img' is an int)
+    dtest:          [str] dataset directory (only when 'img' is an int)
     normalize:      [bool] if True, normalize each sub-plot individually
     ----------------------------------------------------------------------------------------------------- """
-    pth     = os.path.join( dir_current, dir_plot )
+    pth     = os.path.join( cnfg[ 'dir_current' ], dir_plot )
     if not os.path.exists( pth ):
         os.makedirs( pth )
 
     if isinstance( img, int ):
         try:
-            img =  os.path.join( dir_test, os.listdir( dir_test )[ img ] )
-        except:
-            ms.print_err( "while opening file " + img )
-            raise
+            img =  os.path.join( dtest, os.listdir( dtest )[ img ] )
+        except Exception as e:
+            raise e
 
     if not os.path.isfile( img ):
         ms.print_err( "while opening file " + img )
@@ -233,11 +525,12 @@ def model_outputs( model, img, dir_test=None, normalize=True ):
 
     for l, o in zip( lay, out ):
         if 'conv' in l:             # plot output only for convolutional layers
-            c, t    = layer_outputs( l, o, pth, normalize=normalize )
+            c, t    = layer_outputs( model, l, o, pth, normalize=normalize )
             cnt     += c
             tot     += t
 
-    ms.print_msg( "Total dead filters percentage: {:.1f}%".format( 100 * cnt / tot ) )
+    if DEBUG0:
+        ms.print_msg( "Total dead filters percentage: {:.1f}%".format( 100 * cnt / tot ) )
 
 
 
@@ -248,7 +541,7 @@ def model_weights( model, normalize=False ):
     model:          [keras.engine.training.Model]
     normalize:      [bool] if True, normalize each sub-plot individually
     ----------------------------------------------------------------------------------------------------- """
-    pth     = os.path.join( dir_current, dir_plot )
+    pth     = os.path.join( cnfg[ 'dir_current' ], dir_plot )
     if not os.path.exists( pth ):
         os.makedirs( pth )
 
@@ -258,24 +551,24 @@ def model_weights( model, normalize=False ):
 
     for l, w in zip( lay, wght ):
         if 'conv' in l:             # plot weights only for convolutional layers
-            layer_weights( l, w[ 0 ], pth, normalize=normalize )
+            layer_weights( model, l, w[ 0 ], pth, normalize=normalize )
 
 
 
-def model_dead( model, layer, n_img, dir_test ):
+def model_dead( model, layer, n_img, dtest ):
     """ -----------------------------------------------------------------------------------------------------
     Count how many features of a layer are inactive, testing the prediction on serevar input images
 
     model:          [keras.engine.training.Model] the result of create_test_model()
     layer:          [int] index of layer
     n_img:          [int] number of input images
-    dir_test:       [str] dataset directory
+    dtest:          [str] dataset directory
     ----------------------------------------------------------------------------------------------------- """
 
     # sample 'n_img' images, evenly spaced, from the test set
-    dir_list    = [ f for f in os.listdir( dir_test ) if f.lower().endswith( ( '.png', '.jpg', '.jpeg' ) ) ]
+    dir_list    = [ f for f in os.listdir( dtest ) if f.lower().endswith( ( '.png', '.jpg', '.jpeg' ) ) ]
     indx        = list( map( int, np.linspace( 0, len( dir_list ), n_img, endpoint=False ) ) )
-    img_list    = [ os.path.join( dir_test, dir_list[ i ] ) for i in indx ]
+    img_list    = [ os.path.join( dtest, dir_list[ i ] ) for i in indx ]
 
     # outputs of layer 'layer' on the 'n_img' images
     out_list    = [ predict_image( model, i )[ layer ] for i in img_list ]

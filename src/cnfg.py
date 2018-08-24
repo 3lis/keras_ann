@@ -22,35 +22,26 @@ import  argparse
 import  msg     as ms
 
 
-DEBUG0          = False         # enable debugging print
+DEBUG0  = False         # enable debugging print
 
 
 
 def get_args():
-    """ -------------------------------------------------------------------------------------------------
+    """ -----------------------------------------------------------------------------------------------------
     Parse the command-line arguments defined by flags
     
     return:         [dict] args and their values
-    ------------------------------------------------------------------------------------------------- """
+    ----------------------------------------------------------------------------------------------------- """
     parser      = argparse.ArgumentParser()
 
     parser.add_argument(
-            '-a',
-            '--arch',
+            '-c',
+            '--config',
             action          = 'store',
-            dest            = 'ARCH',
+            dest            = 'CONFIG',
             type            = str,
             required        = True,
-            help            = "config file describing the model architecture"
-    )
-    parser.add_argument(
-            '-t',
-            '--train',
-            action          = 'store',
-            dest            = 'TRAIN',
-            type            = str,
-            default         = None,
-            help            = "config file describing the training parameters"
+            help            = "config file describing the model architecture and training parameters"
     )
     parser.add_argument(
             '-l',
@@ -58,36 +49,52 @@ def get_args():
             action          = 'store',
             dest            = 'LOAD',
             type            = str,
-            default         = None,
-            help            = "HDF5 file of model weights"
+            help            = "Folder or HDF5 file to load as weights or entire model"
     )
     parser.add_argument(
-            '-s',
+            '-T',
+            '--train',
+            action          = 'store_true',
+            dest            = 'TRAIN',
+            help            = "execute training of the model"
+    )
+    parser.add_argument(
+            '-t',
             '--test',
             action          = 'store_true',
             dest            = 'TEST',
             help            = "execute testing routines"
     )
     parser.add_argument(
-            '-x',
+            '-e',
+            '--err',
+            action          = 'store_true',
+            dest            = 'STDERR',
+            help            = "redirect stderr to log file"
+    )
+    parser.add_argument(
+            '-s',
             '--save',
             action          = 'count',
             dest            = 'ARCHIVE',
             default         = 0,
-            help            = "archive config files [-x] or even python scripts [-xx]"
+            help            = "archive config files [-s] or even python scripts [-ss]"
     )
 
     return vars( parser.parse_args() )
 
 
 
-def load_config( fname, cnfg ):
-    """ -------------------------------------------------------------------------------------------------
-    Load the content of a config file, and put the information in the config dictionary
+def get_config( fname ):
+    """ -----------------------------------------------------------------------------------------------------
+    Return the content of a config file in the form of a dictionary
 
     fname:          [str] config file (full path)
-    cnfg:           [dict] to be filled with the content of the file
-    ------------------------------------------------------------------------------------------------- """
+
+    return:         [dict] content of the file
+    ----------------------------------------------------------------------------------------------------- """
+    cnfg    = dict()
+
     if not os.path.isfile( fname ):
         ms.print_err( "configuration file \"{}\" not found.".format( fname ) )
 
@@ -97,14 +104,24 @@ def load_config( fname, cnfg ):
 
     with open( fname ) as doc:
         for line in doc:
-            if line[ 0 ] == '#':        # comment line
-                continue
+            if line[ 0 ] == '#': continue   # comment line
 
             c   = line.rsplit()
-            if len( c ) == 0:           # empty line
-                continue
+            if len( c ) == 0: continue      # empty line
 
-            if c[ 0 ] in cnfg:
-                cnfg[ c[ 0 ] ] = eval( str().join( c[ 1: ] ) )
-            else:
-                ms.print_err( "configuration setting \"{}\" does not exist.".format( c[ 0 ] ) )
+            cnfg[ c[ 0 ] ] = eval( str().join( c[ 1: ] ) )
+
+    return cnfg
+
+
+
+def load_config( cnfg, dest ):
+    """ -----------------------------------------------------------------------------------------------------
+    Use the first dict to fill the value of the second dict, in case of common keys
+
+    cnfg:           [dict] one with all configs
+    dest:           [dict] one to be filled
+    ----------------------------------------------------------------------------------------------------- """
+    for k in dest.keys():
+        if k in cnfg.keys():
+            dest[ k ]   = cnfg[ k ]

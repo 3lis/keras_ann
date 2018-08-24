@@ -1,7 +1,7 @@
 """
 #############################################################################################################
 
-Functions for training, saving and loading weights of a model
+Functions for training a model
 
     Alice   2018
 
@@ -11,21 +11,28 @@ Functions for training, saving and loading weights of a model
 import  os
 import  datetime
 
-from    math        import ceil
-from    keras       import utils, models, losses, optimizers, preprocessing, callbacks
+from    math                import ceil, sqrt
+from    keras               import utils, models, losses, optimizers, callbacks, preprocessing
+from    keras               import backend  as K
 
-import  msg         as ms
+import  matplotlib
+matplotlib.use( 'agg' )     # to use matplotlib with unknown 'DISPLAY' var (when using remote display)
+from    matplotlib          import pyplot   as plt
+
+import  msg                                 as ms
+import  nn_dset                             as nd
 
 
-SHUFFLE         = True          # shuffle dataset
-
-RGB             = None          # set by nn_main.py
-img_size        = None          # set by nn_main.py
-dir_current     = None          # set by nn_main.py
+SHUFFLE         = True
 dir_check       = 'chkpnt'
+name_best       = 'nn_best.h5'
 
 cnfg            = {
+    'img_size'      : None,
+    'dir_current'   : None,
     'dir_dset'      : None,
+    'data_class'    : None,
+    'patience'      : None,
     'n_gpus'        : None,     # [int] number of GPUs (0 if using CPU)
     'n_epochs'      : None,     # [int] number of epochs
     'batch_size'    : None,     # [int] batch size
@@ -36,69 +43,75 @@ cnfg            = {
 }
 
 
-# ===========================================================================================================
 
-
-def gen_dataset( dir_dset ):
+def get_unbalanced_loss():
     """ -----------------------------------------------------------------------------------------------------
-    Take the path to a directory and generate batches of data.
+    Setup a loss function for unbalanced loss
 
-    The three sub-dataset must have these paths:
-        * dir_dset/train/frames/
-        * dir_dset/valid/frames/
-        * dir_dset/test/frames/
-
-    https://keras.io/preprocessing/image/#imagedatagenerator-methods
-
-    dir_dset:       [str]
-
-    return:         [list] of keras_preprocessing.image.DirectoryIterator
+    return:         the symbol to a function in y_true, y_pred
     ----------------------------------------------------------------------------------------------------- """
+    dr      = os.path.join( cnfg[ 'dir_dset' ], 'valid', cnfg[ 'data_class' ].lower(), 'img' )
 
-    # 'rescale' to normalize pixels in [0..1]
-    train_idg       = preprocessing.image.ImageDataGenerator( rescale=1./255 )
-    valid_idg       = preprocessing.image.ImageDataGenerator( rescale=1./255 )
+    if not os.path.isdir( dr ):
+        raise ValueError( "{} directory does not exist".format( dr ) )
 
-    train_datagen   = train_idg.flow_from_directory(
-            directory   = os.path.join( cnfg[ 'dir_dset' ], 'train' ),
-            target_size = img_size if RGB else img_size[ :-1 ],
-            color_mode  = 'rgb' if RGB else 'grayscale',
-            class_mode  = 'input',          # use this when model output is supposed to be equal to input
-            batch_size  = cnfg[ 'batch_size' ],
-            shuffle     = SHUFFLE
-    )
+    imgs    = [ f for f in os.listdir( dr ) if f.lower().endswith( ( '.png', '.jpg', '.jpeg' ) ) ]
+    pix_img = cnfg[ 'img_size' ][ 0 ] * cnfg[ 'img_size' ][ 1 ]
+    n_tot   = 0
+    n_ones  = 0
 
-    valid_datagen   = valid_idg.flow_from_directory(
-            directory   = os.path.join( cnfg[ 'dir_dset' ], 'valid' ),
-            target_size = img_size if RGB else img_size[ :-1 ],
-            color_mode  = 'rgb' if RGB else 'grayscale',
-            class_mode  = 'input',          # use this when model output is supposed to be equal to input
-            batch_size  = cnfg[ 'batch_size' ],
-            shuffle     = SHUFFLE
-    )
+    for i in imgs:
+        f       = os.path.join( dr, i )
+        im      = preprocessing.image.load_img( f, grayscale=True, target_size = cnfg[ 'img_size' ][ :-1 ] )
+        im      = preprocessing.image.img_to_array( im )
+        n_ones  += ( im == 255 ).sum()
+        n_tot   +=  pix_img
 
-    return train_datagen, valid_datagen
+    p_ones  = sqrt( float( n_ones ) ) / n_tot
+    p_zeros = 1 - p_ones
+
+    def unbalanced_loss( y_true, y_pred ):
+        w   = p_zeros * y_true + p_ones * ( 1. - y_true )   # compute weights from inverse probability
+        l   = K.binary_crossentropy( y_true, y_pred )       # ordinary binary crossentropy
+        u   = w * l                                         # the umbalanced loss
+        return K.mean( u )
+
+    return unbalanced_loss                                  # return the symbol of the funciont yet defined
 
 
 
-def set_callback( n_check ):
+def set_callback():
     """ -----------------------------------------------------------------------------------------------------
-    Save checkpoints of the model during training
-
-    n_check:        [int] number of total checkpoints
+    Save checkpoints of the model during training.
+    Stop training when val_loss stop decreasing
 
     return:         [keras.callbacks.ModelCheckpoint]
     ----------------------------------------------------------------------------------------------------- """
-    p       = os.path.join( dir_current, dir_check )
-    fname   = os.path.join( p, "check_{epoch:04d}.h5" )
-    os.makedirs( p )
+    calls   = []
+    period  = ceil( cnfg[ 'n_epochs' ] / cnfg[ 'n_check' ] )
 
-    period  = ceil( cnfg[ 'n_epochs' ] / n_check )
-    return callbacks.ModelCheckpoint( fname, save_weights_only=True, period=period )
+    if cnfg[ 'n_check' ] > 0:
+        calls.append( callbacks.ModelCheckpoint(
+                os.path.join( cnfg[ 'dir_current' ], name_best ),
+                save_best_only      = True,
+                save_weights_only   = False,
+                period              = 1
+        ) )
+
+    if cnfg[ 'n_check' ] > 1:
+        p       = os.path.join( cnfg[ 'dir_current' ], dir_check )
+        fname   = os.path.join( p, "check_{epoch:04d}.h5" )
+        os.makedirs( p )
+        calls.append( callbacks.ModelCheckpoint( fname, save_weights_only=True, period=period ) )
+
+    if cnfg[ 'patience' ] > 0:
+        calls.append( callbacks.EarlyStopping( monitor='val_loss', patience=cnfg[ 'patience' ] ) )
+
+    return calls
 
 
 
-def train_model( model ):
+def train_model( model, tlog='train.time' ):
     """ -----------------------------------------------------------------------------------------------------
     Train the network
 
@@ -108,11 +121,17 @@ def train_model( model ):
     https://keras.io/getting-started/faq/#how-can-i-run-a-keras-model-on-multiple-gpus
 
     model:          [keras.engine.training.Model]
+    tlog:           [str] file name
+
+    return:         [keras.callbacks.History]
     ----------------------------------------------------------------------------------------------------- """
     op                      = None
     ls                      = None
-    cb                      = [ set_callback( cnfg[ 'n_check' ] ) ] if cnfg[ 'n_check' ] > 0 else None
-    train_feed, valid_feed  = gen_dataset( cnfg[ 'dir_dset' ] ) # train and valid dataset generators
+    cb                      = set_callback()
+
+    # train and valid dataset generators
+    train_feed, valid_feed                      = nd.gen_dataset( cnfg[ 'dir_dset' ] )
+    train_samples, valid_samples, test_samples  = nd.len_dataset( cnfg[ 'dir_dset' ] )
 
     # optimizer
     if cnfg[ 'optimizer' ] == 'ADAGRAD':
@@ -131,6 +150,10 @@ def train_model( model ):
         ls      = losses.mean_squared_error
     elif cnfg[ 'loss' ] == 'CXE':
         ls      = losses.categorical_crossentropy
+    elif cnfg[ 'loss' ] == 'BXE':
+        ls      = losses.binary_crossentropy
+    elif cnfg[ 'loss' ] == 'UNB':
+        ls      = get_unbalanced_loss()
     else:
         ms.print_err( "Loss {} not valid".format( cnfg[ 'loss' ] ) )
     
@@ -147,61 +170,41 @@ def train_model( model ):
 
     t_start                 = datetime.datetime.now()           # starting time of execution
 
-    model.fit_generator(
+    history = model.fit_generator(
             train_feed,
-            epochs          = cnfg[ 'n_epochs' ],
-            validation_data = valid_feed,
-            steps_per_epoch = train_feed.samples / cnfg[ 'batch_size' ],
-            callbacks       = cb,
-            shuffle         = SHUFFLE
+            epochs              = cnfg[ 'n_epochs' ],
+            validation_data     = valid_feed,
+            steps_per_epoch     = train_samples / cnfg[ 'batch_size' ],
+            validation_steps    = valid_samples / cnfg[ 'batch_size' ],
+            callbacks           = cb,
+            verbose             = 2,
+            shuffle             = SHUFFLE
     )
 
     t_end   = datetime.datetime.now()                           # end time of execution
 
-    fname   = os.path.join( dir_current, "train.time" )
+    fname   = os.path.join( cnfg[ 'dir_current' ], tlog )
     with open( fname, 'w' ) as f:
-        f.write( str( t_end - t_start ) )                       # save total time of execution
+        f.write( str( t_end - t_start ) + '\n' )                # save total time of execution
+
+    return history
 
 
 
-def save_model( model, together=False, name="nn" ):
+def plot_history( history, fname='loss.pdf' ):
     """ -----------------------------------------------------------------------------------------------------
-    Save a trained model in a single HDF5 file or in two different files,
-    one for the architecture (JSON) and one for the weight (HDF5)
+    Plot the loss performance during training
 
-    model:          [keras.engine.training.Model]
-    together:       [bool] if True save a single file
-    name:           [str] name of the model
+    history:        [keras.callbacks.History]
     ----------------------------------------------------------------------------------------------------- """
-    name    = os.path.join( dir_current, name )
+    train_loss  = history.history[ 'loss' ]
+    valid_loss  = history.history[ 'val_loss' ]
+    epochs      = range( 1, len( train_loss ) + 1 )
 
-    if together:
-        model.save( name + '.h5' )
-
-    else:                                               # save separately architecture and weights
-        model.save_weights( name + '_wght.h5' )
-        with open( name + '_arch.json', 'w' ) as f:
-            f.write( model.to_json() )
-
-
-
-def load_model( *fname ):
-    """ -----------------------------------------------------------------------------------------------------
-    Load a trained model for file. The argument can be a single HDF5 file (with architecture and weights)
-    or two separate files
-    
-    In the second case, the first file passed is the model architecture, the second the model weights
-
-    fname:          [str] name(s) of file(s)
-    ----------------------------------------------------------------------------------------------------- """
-    if len( fname ) == 0:
-        ms.print_wrn( "no file passed" )
-        return None
-
-    if len( fname ) == 1:                               # if a single file is passed
-        return models.load_model( fname )                   
-
-    model   = models.model_from_json( fname[ 0 ] )
-    model.load_weights( fname[ 1 ] )
-
-    return model
+    plt.plot( epochs, train_loss, 'r--' )
+    plt.plot( epochs, valid_loss, 'b-' )
+    plt.legend( [ 'Training Loss', 'Validation Loss' ] )
+    plt.xlabel( 'Epoch' )
+    plt.ylabel( 'Loss' )
+    plt.savefig( os.path.join( cnfg[ 'dir_current' ], fname ) )
+    plt.close()
