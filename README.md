@@ -27,13 +27,13 @@ The third set of neural models expands the previous architecture with the inclus
 This architecture is not directed at performing prediction in the long future, but it is trained to obtain a more refined latent representation that takes in consideration also the temporal coherence between frames.
 
 
-##### Predictive models (TIME, RTIME, RMTIME)
+#### Predictive models (TIME, RTIME, RMTIME)
 The last set of neural models focuses on long-term prediction of future sequences, using as input/output only the latent representations computed by the temporal autoencoders.
 
 
 | VAE                    | MVAE                    | RMVAE                    |
 :-----------------------:|:-----------------------:|:-------------------------:
-| ![vae](doc/nets_0.pdf) | ![mvae](doc/nets_1.pdf) | ![rmvae](doc/nets_2.pdf) |
+| ![vae](doc/nets_0.png) | ![mvae](doc/nets_1.pdf) | ![rmvae](doc/nets_2.pdf) |
 
 
 <!--
