@@ -33,7 +33,7 @@ The last set of neural models focuses on long-term prediction of future sequence
 
 | VAE                    | MVAE                    | RMVAE                    |
 :-----------------------:|:-----------------------:|:-------------------------:
-| ![vae](doc/nets_0.png) | ![mvae](doc/nets_1.pdf) | ![rmvae](doc/nets_2.pdf) |
+| ![vae](doc/nets_0.png | width=100) | ![mvae](doc/nets_1.pdf) | ![rmvae](doc/nets_2.pdf) |
 
 
 <!--
