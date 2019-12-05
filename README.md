@@ -1,7 +1,7 @@
 # Experiments with Autoencoders
 
 ###### *Alice, December 2019*
---
+---
 
 This is the repository for the development of artificial neural networks with autoencoder-like architectures.
 
@@ -11,17 +11,17 @@ The deep learning framework of choice is Keras 2.2.4 using TensorFlow 1.12.0 bac
 
 ## Neural architectures
 
-##### Standard autoencoders (AE and VAE)
+#### Standard autoencoders (AE and VAE)
 The first set of neural models we developed are simple autoencoders having a single color image as input, and are trained to reconstruct the same image as output, in a totally unsupervised way. We initially developed a standard autoencoder, and then we improved it into a variational autoencoder.
 
 
-##### Topological autoencoders (MAE and MVAE)
+#### Topological autoencoders (MAE and MVAE)
 A second set of neural models shares the encoder structure of the previous models, but tries to explicitly learn in the latent space a compressed representation of the location of cars and lane markings in the scene. We developed these architectures initially with a standard latent space, and then using variational Bayes.
 
 There are 3 different decoders reconstructing, respectively, the initial color image, a binary mask indicating the locations of other cars, and a binary mask for the location of lane markings. The 2 "topological" branches of the network require a supervised training, with the use of segmented ground truth. 
 
 
-##### Temporal autoencoders (RAE, RVAE and RMVAE)
+#### Temporal autoencoders (RAE, RVAE and RMVAE)
 The third set of neural models expands the previous architecture with the inclusion of temporal information. A sequence of frames is fed to a topological autoencoder, which produce a corresponding sequence of latent spaces. This sequence is passed to a reccurent network predicting a new sequence future latent spaces, which are then expanded to images through the same decoder of the topological model.
 
 This architecture is not directed at performing prediction in the long future, but it is trained to obtain a more refined latent representation that takes in consideration also the temporal coherence between frames.
@@ -31,9 +31,9 @@ This architecture is not directed at performing prediction in the long future, b
 The last set of neural models focuses on long-term prediction of future sequences, using as input/output only the latent representations computed by the temporal autoencoders.
 
 
-| VAE                 | MVAE                | RMVAE               |
-:--------------------:|:-------------------:|:--------------------:
-| ![](doc/nets_0.pdf) | ![](doc/nets_1.pdf) | ![](doc/nets_2.pdf) |
+| VAE                    | MVAE                    | RMVAE                    |
+:-----------------------:|:-----------------------:|:-------------------------:
+| ![vae](doc/nets_0.pdf) | ![mvae](doc/nets_1.pdf) | ![rmvae](doc/nets_2.pdf) |
 
 
 <!--
